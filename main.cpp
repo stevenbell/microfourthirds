@@ -174,18 +174,68 @@ void powerup() {
   writeByte(0x00);
 
   pinMode(DATA, INPUT);
-  /*
-  digitalWrite(BODY_ACK, LOW);
-  digitalWrite(BODY_ACK, HIGH);
-  readByte(); // Should be 0xBA
-  */
-
   for(int i = 0; i < 24; i++){
     digitalWrite(BODY_ACK, LOW);
     waitLensRise();
     digitalWrite(BODY_ACK, HIGH);
     readByte();
   }
+
+  digitalWrite(BODY_ACK, LOW);
+  delay(1);
+  digitalWrite(BODY_ACK, HIGH);
+  waitLensRise();
+
+  writeByte(0x60);
+  writeByte(0xF0);
+  writeByte(0x00);
+  writeByte(0x00);
+
+  // Read one byte
+  pinMode(DATA, INPUT);
+  digitalWrite(BODY_ACK, LOW);
+  waitLensRise();
+  digitalWrite(BODY_ACK, HIGH);
+  readByte(); // Should be 0x50
+
+  digitalWrite(BODY_ACK, LOW);
+  delayMicroseconds(250);
+  digitalWrite(BODY_ACK, HIGH);
+  waitLensRise();
+
+  writeByte(0x05);
+  writeByte(0x00);
+  writeByte(0x00);
+  writeByte(0xD1);
+  writeByte(0x00);
+  writeByte(0x02);
+
+  // Read one byte
+  pinMode(DATA, INPUT);
+  digitalWrite(BODY_ACK, LOW);
+  waitLensRise();
+  digitalWrite(BODY_ACK, HIGH);
+  readByte(); // Should be 0xD3
+
+
+  digitalWrite(BODY_ACK, LOW);
+  delayMicroseconds(250);
+  digitalWrite(BODY_ACK, HIGH);
+  waitLensRise();
+
+  writeByte(0xC1);
+  writeByte(0x80);
+  writeByte(0x01);
+  writeByte(0x02);
+
+  pinMode(DATA, INPUT);
+  for(int i = 0; i < 34; i++){
+    digitalWrite(BODY_ACK, LOW);
+    waitLensRise();
+    digitalWrite(BODY_ACK, HIGH);
+    readByte();
+  }
+
 
 
   delay(100);
