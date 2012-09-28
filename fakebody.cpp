@@ -1,38 +1,12 @@
+/* fakebody.cpp
+ * Code that pretends to the the camera body and drives the lens.
+ * Steven Bell <sebell@stanford.edu>
+ * August 2012
+ */
+
 #include "Arduino.h"
 #include "typedef.h"
-
-#define SLEEP 53 // Port B 0
-#define BODY_ACK 51 // Port B 2
-
-#define LENS_ACK 49 // Port L 0
-#define LENS_ACK_PIN PINL
-
-#define CLK 45 // Port L 4
-#define CLK_PORT PORTL
-
-#define DATA 47 // Port L 2
-#define DATA_PORT PORTL // PORT holds outputs
-#define DATA_PIN PINL // PIN holds inputs
-#define DATA_DIR DDRL
-
-#define FOCUS 41
-#define SHUTTER 43
-
-// Useful bitmasks for manipulating the IO pins
-// Bitwise OR these with port registers to set pins high
-const uint8 CLK_HIGH = 0b00010000;
-const uint8 DATA_HIGH = 0b00000100;
-
-// Bitwise AND these with port registers to read the pin
-const uint8 LENS_ACK_HIGH = 0b00000001;
-
-const uint8 DATA_WRITE = 0b00010100; // Both CLK and DATA pins
-
-// Bitwise AND these with port registers to set pins low
-const uint8 CLK_LOW = ~CLK_HIGH;
-const uint8 DATA_LOW = ~DATA_HIGH;
-
-const uint8 DATA_READ = DATA_LOW;
+#include "common.h"
 
 /* Performs one-time pin initialization and other setup */
 void setup() {
@@ -55,7 +29,8 @@ void setup() {
  * The data is written LSB-first. */
 void writeByte(uint8 value)
 {
-  DATA_DIR |= DATA_WRITE;
+  DATA_DIR |= DATA_WRITE; // Just in case...
+  DATA_DIR |= CLK_WRITE;
   // Data is set on the falling edge, and the lens reads it on the rising edge
   for(uint8 i = 0; i < 8; i++){
     CLK_PORT &= CLK_LOW; // Set the clock pin low
