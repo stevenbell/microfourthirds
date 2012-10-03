@@ -51,15 +51,21 @@ inline void waitBodyHigh()
 /* Reads a single byte from the SPI bus.
  * Data is read LSB-first
  */
-uint8 readByte()
+inline uint8 readByte()
 {
-  unsigned char value = 0;
+  uint8 pinvals[8];
+  uint8 value = 0;
+
   for(int i = 0; i < 8; i++){
     while(CLK_PIN & CLK_HIGH){} // Wait for the clock pin to fall
     while(!(CLK_PIN & CLK_HIGH)){} // Wait for the clock pin to rise
-    // Save the bit
+    pinvals[i] = CLK_PIN;
+  }
+
+  // Now that we've captured all the values, build them into a single byte
+  for(int i = 0; i < 8; i++){
     value = value >> 1;
-    if(DATA_PIN & DATA_HIGH){
+    if(pinvals[i] & DATA_HIGH){
       value |= 0x80;
     }
   }
@@ -97,11 +103,37 @@ void writeByte(uint8 value)
   }
 }
 
+/* Reads a number of bytes and then transmits the checksum.
+ * nBytes - Number of bytes to read.  Must be greater than zero.
+ */
+void readBytesChecksum(uint8 nBytes)
+{
+  uint8 checksum = 0;
+
+  for(uint8 i = 0; i < nBytes - 1; i++){
+    checksum += readByte();
+    digitalWrite(LENS_ACK, 0); // Working
+    digitalWrite(LENS_ACK, 1); // Ready
+  }
+
+  // Last byte
+  checksum += readByte(); // 0x00
+  digitalWrite(LENS_ACK, 0); // Working
+  // Note: No ready here, we're waiting for the body to drop
+
+  // Now we reply with the checksum
+  pinMode(DATA, OUTPUT);
+  digitalWrite(DATA, HIGH); // Not sure why this is necessary, but it is
+  waitBodyFall();
+  digitalWrite(LENS_ACK, 1); // Ready
+  waitBodyHigh();
+  writeByte(checksum);
+}
+
 int main()
 {
   init(); // Arduino library init
   setup(); // Pin setup
-  uint8 checksum = 0;
 
   // Sit and wait for the sleep pin to go high (camera is turned on)
   while(digitalRead(SLEEP) == 0){}
@@ -120,31 +152,7 @@ int main()
   // Ready
   digitalWrite(LENS_ACK, 1);
 
-  // Read four bytes
-  checksum += readByte(); // 0xB0
-  digitalWrite(LENS_ACK, 0); // Working
-  digitalWrite(LENS_ACK, 1); // Ready
-
-  checksum += readByte(); // 0xF2
-  digitalWrite(LENS_ACK, 0); // Working
-  digitalWrite(LENS_ACK, 1); // Ready
-
-  checksum += readByte(); // 0x00
-  digitalWrite(LENS_ACK, 0); // Working
-  digitalWrite(LENS_ACK, 1); // Ready
-
-  checksum += readByte(); // 0x00
-  digitalWrite(LENS_ACK, 0); // Working
-  // Note: No ready here, we're waiting for the body to drop
-
-  pinMode(DATA, OUTPUT);
-  digitalWrite(DATA, HIGH);
-  waitBodyFall();
-  digitalWrite(LENS_ACK, 1); // Ready
-  waitBodyRise();
-
-  // Now we reply with the checksum
-  writeByte(checksum);
+  readBytesChecksum(4); // Read four bytes
 
   waitBodyFall();
   digitalWrite(LENS_ACK, 0);
@@ -167,26 +175,7 @@ int main()
   waitBodyRise();
   digitalWrite(LENS_ACK, 1);
 
-  checksum = 0;
-    // Read four bytes
-  checksum += readByte(); // 0xB0
-  digitalWrite(LENS_ACK, 0); // Working
-  digitalWrite(LENS_ACK, 1); // Ready
-
-  checksum += readByte(); // 0xF2
-  digitalWrite(LENS_ACK, 0); // Working
-  digitalWrite(LENS_ACK, 1); // Ready
-
-  checksum += readByte(); // 0x00
-  digitalWrite(LENS_ACK, 0); // Working
-  digitalWrite(LENS_ACK, 1); // Ready
-
-  checksum += readByte(); // 0x00
-  digitalWrite(LENS_ACK, 0); // Working
-
-  waitBodyLow();
-  digitalWrite(LENS_ACK, 1);
-  writeByte(checksum);
+  readBytesChecksum(4); // Read four bytes
 
   // # bytes, bytes, checksum
   uint8 sendBytes[] = {0x05, 0x00, 0x0a, 0x10, 0xc4, 0x09, 0xe7};
@@ -197,6 +186,29 @@ int main()
     digitalWrite(LENS_ACK, 1);
     writeByte(sendBytes[i]);
   }
+  pinMode(DATA, INPUT);
+
+  waitBodyLow(); // Drop happens very fast
+  digitalWrite(LENS_ACK, 0);
+  waitBodyHigh();
+  digitalWrite(LENS_ACK, 1);
+
+  //readBytesChecksum(4);
+  readByte();
+  digitalWrite(LENS_ACK, 0); // Working
+  digitalWrite(LENS_ACK, 1); // Ready
+
+  readByte();
+  digitalWrite(LENS_ACK, 0); // Working
+  digitalWrite(LENS_ACK, 1); // Ready
+
+  readByte();
+  digitalWrite(LENS_ACK, 0); // Working
+  digitalWrite(LENS_ACK, 1); // Ready
+
+  readByte();
+  digitalWrite(LENS_ACK, 0); // Working
+  digitalWrite(LENS_ACK, 1); // Ready
 
   // ACK
   while(1); // Don't ever return; who knows where we'd end up.
