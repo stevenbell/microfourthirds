@@ -15,10 +15,21 @@ void setup() {
   pinMode(SLEEP, INPUT);
   pinMode(BODY_ACK, INPUT);
   pinMode(LENS_ACK, OUTPUT);
-  pinMode(CLK, INPUT);
-  pinMode(DATA, INPUT);
   pinMode(FOCUS, INPUT);
   pinMode(SHUTTER, INPUT);
+
+  // Configure the SPI hardware
+  // SPE - Enable
+  // DORD - Set data order to LSB-first
+  // Slave mode (Master bit is not set)
+  // CPOL - Set clock polarity to "normally high"
+  // CPHA - Set to read on trailing (rising) edge
+  SPCR = (1<<SPE) | (1<<DORD) | (1<<CPOL) | (1<<CPHA);
+
+  // Set up the SPI pins
+  pinMode(CLK, INPUT);
+  pinMode(DATA_MISO, INPUT); // Until we have an explicit write, make both inputs
+  pinMode(DATA_MOSI, INPUT);
 }
 // Wait for a falling edge on the body ACK pin
 inline void waitBodyFall()
@@ -51,56 +62,36 @@ inline void waitBodyHigh()
 /* Reads a single byte from the SPI bus.
  * Data is read LSB-first
  */
-inline uint8 readByte()
+uint8 readByte()
 {
-  uint8 pinvals[8];
-  uint8 value = 0;
+  pinMode(DATA_MISO, INPUT); // Just in case it was an output last
 
-  for(int i = 0; i < 8; i++){
-    while(CLK_PIN & CLK_HIGH){} // Wait for the clock pin to fall
-    while(!(CLK_PIN & CLK_HIGH)){} // Wait for the clock pin to rise
-    pinvals[i] = CLK_PIN;
-  }
+  // Clear the SPIF bit from any previously received bytes by reading SPDR
+  SPDR = 0x00;
 
-  // Now that we've captured all the values, build them into a single byte
-  for(int i = 0; i < 8; i++){
-    value = value >> 1;
-    if(pinvals[i] & DATA_HIGH){
-      value |= 0x80;
-    }
-  }
-  return(value);
+  // Wait until we receive a byte
+  while(!(SPSR & (1<<SPIF))) {}
+
+  return(SPDR);
 }
 
 /* Writes an 8-bit value on the data bus.  The clock is driven by the body.
- * This does some ugly tricks to get the data out fast enough.  It would be
- * faster (and probably more robust) to use the SPI hardware instead.
  */
 void writeByte(uint8 value)
 {
-  DATA_DIR |= DATA_WRITE; // Set the data pin to be an output
-  uint8 portvals[8];
+  // Set the bytes we want to write
+  SPDR = value;
 
-  // Precalculate all of the port values we are going to set, so that setting
-  // the pin is a single instruction.  If we have to do any work during the
-  // loop, we won't be able to keep up and respond within 1us.
-  for(uint8 i = 0; i < 8; i++){
-    portvals[i] = DATA_PORT;
-    if(value & 0x01){ // Set the data pin to the bit value
-      portvals[i] |= DATA_HIGH;
-    }
-    else{
-      portvals[i] &= DATA_LOW;
-    }
-    value = value >> 1; // Shift down to the next bit
-  }
+  // Set the MISO pin to be an output
+  //DATA_PIN |= DATA_MISO_WRITE;
+  pinMode(DATA_MISO, OUTPUT);
 
-  // Data is set on the falling edge, and the body reads it on the rising edge
-  for(uint8 i = 0; i < 8; i++){
-    while(CLK_PIN & CLK_HIGH){} // Wait for the clock pin to fall
-    DATA_PORT = portvals[i];
-    while(!(CLK_PIN & CLK_HIGH)){} // Wait for the clock pin to rise
-  }
+  // Wait until transmission is finished
+  while(!(SPSR & (1<<SPIF))) {}
+
+  // Clear SPIF
+  // BUG: When this was set to 0x00, it didn't do anything.  Perhaps it was optimized away?
+  SPDR = 0xFF;
 }
 
 /* Reads a number of bytes and then transmits the checksum.
@@ -122,12 +113,49 @@ void readBytesChecksum(uint8 nBytes)
   // Note: No ready here, we're waiting for the body to drop
 
   // Now we reply with the checksum
-  pinMode(DATA, OUTPUT);
-  digitalWrite(DATA, HIGH); // Not sure why this is necessary, but it is
+  //pinMode(DATA, OUTPUT);
+  //digitalWrite(DATA, HIGH); // Not sure why this is necessary, but it is
   waitBodyFall();
   digitalWrite(LENS_ACK, 1); // Ready
   waitBodyHigh();
   writeByte(checksum);
+}
+
+// # bytes, bytes, checksum
+void writeBytesChecksum(uint8 nBytes, uint8* values)
+{
+  uint8 checksum = 0;
+
+  // Write the first byte, which is the number of bytes in the packet
+  waitBodyFall(); // Wait for body to drop
+  digitalWrite(LENS_ACK, 0); // We drop and then rise (ready to send next byte)
+  digitalWrite(LENS_ACK, 1);
+  writeByte(nBytes);
+
+  // Now write the byte values themselves
+  for(uint8 i = 0; i < nBytes; i++){
+    waitBodyLow();
+    digitalWrite(LENS_ACK, 0);
+    digitalWrite(LENS_ACK, 1);
+    writeByte(values[i]);
+    checksum += values[i]; // Keep a running total
+  }
+
+  // Finally, write the checksum
+  waitBodyLow();
+  digitalWrite(LENS_ACK, 0);
+  digitalWrite(LENS_ACK, 1);
+  writeByte(checksum);
+}
+
+void standbyPacket(void)
+{
+  readBytesChecksum(4);
+
+  uint8 values[31] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+  writeBytesChecksum(31, values);
 }
 
 int main()
@@ -168,8 +196,6 @@ int main()
 
   writeByte(0x00);
 
-  pinMode(DATA, INPUT);
-
   waitBodyLow(); // Falling edge happens very fast
   digitalWrite(LENS_ACK, 0);
   waitBodyRise();
@@ -177,40 +203,61 @@ int main()
 
   readBytesChecksum(4); // Read four bytes
 
-  // # bytes, bytes, checksum
-  uint8 sendBytes[] = {0x05, 0x00, 0x0a, 0x10, 0xc4, 0x09, 0xe7};
-
-  for(int i = 0; i < 7; i++){
-    waitBodyFall(); // Wait for body to drop
-    digitalWrite(LENS_ACK, 0); // We drop and then rise (ready to send next byte)
-    digitalWrite(LENS_ACK, 1);
-    writeByte(sendBytes[i]);
-  }
-  pinMode(DATA, INPUT);
+  uint8 sendBytes[5] = {0x00, 0x0a, 0x10, 0xc4, 0x09};
+  writeBytesChecksum(5, sendBytes);
 
   waitBodyLow(); // Drop happens very fast
   digitalWrite(LENS_ACK, 0);
   waitBodyHigh();
   digitalWrite(LENS_ACK, 1);
 
-  //readBytesChecksum(4);
-  readByte();
-  digitalWrite(LENS_ACK, 0); // Working
-  digitalWrite(LENS_ACK, 1); // Ready
+  readBytesChecksum(4);
 
-  readByte();
-  digitalWrite(LENS_ACK, 0); // Working
-  digitalWrite(LENS_ACK, 1); // Ready
+  waitBodyLow();
+  digitalWrite(LENS_ACK, 0);
+  waitBodyHigh();
+  digitalWrite(LENS_ACK, 1);
 
-  readByte();
-  digitalWrite(LENS_ACK, 0); // Working
-  digitalWrite(LENS_ACK, 1); // Ready
+  // The body drops the clock for some unknown reason, ruining the
+  // SPI line synchronization.  Reset the hardware to fix it.
+  SPCR = 0;
+  SPCR = (1<<SPE) | (1<<DORD) | (1<<CPOL) | (1<<CPHA);
+  readBytesChecksum(4);
 
-  readByte();
-  digitalWrite(LENS_ACK, 0); // Working
-  digitalWrite(LENS_ACK, 1); // Ready
+  // Information contained in here:
+  // Aperture limits, focus limits, zoom?
+  // Firmware version
+  // Vendor
+  // # bytes, bytes, checksum
+  uint8 sendBytes2[21] = {0x00, 0x00, 0x00, 0x01, 0x10, 0x00, 0x00, 0x41,
+                          0x41, 0x41, 0x32, 0x34, 0x33, 0x38, 0x34, 0x31,
+                          0x00, 0x00, 0x00, 0x01, 0x11};
+  writeBytesChecksum(21, sendBytes2);
 
-  // ACK
-  while(1); // Don't ever return; who knows where we'd end up.
+  waitBodyLow();
+  digitalWrite(LENS_ACK, 0);
+  waitBodyHigh();
+  digitalWrite(LENS_ACK, 1);
+
+  readBytesChecksum(4);
+
+  // The body expects some bytes here...
+  writeBytesChecksum(2, sendBytes2);
+
+  waitBodyLow();
+  digitalWrite(LENS_ACK, 0);
+  waitBodyHigh();
+  digitalWrite(LENS_ACK, 1);
+
+  readBytesChecksum(4);
+
+  waitBodyLow();
+  digitalWrite(LENS_ACK, 0);
+  delay(10);
+  digitalWrite(LENS_ACK, 1);
+
+  while(1){
+    //standbyPacket();
+  }
   return(0);
 }
