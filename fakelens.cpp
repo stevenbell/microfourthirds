@@ -97,24 +97,24 @@ void writeByte(uint8 value)
 /* Reads a number of bytes and then transmits the checksum.
  * nBytes - Number of bytes to read.  Must be greater than zero.
  */
-void readBytesChecksum(uint8 nBytes)
+void readBytesChecksum(uint8 nBytes, uint8* values)
 {
   uint8 checksum = 0;
 
   for(uint8 i = 0; i < nBytes - 1; i++){
-    checksum += readByte();
+    values[i] = readByte();
+    checksum += values[i];
     digitalWrite(LENS_ACK, 0); // Working
     digitalWrite(LENS_ACK, 1); // Ready
   }
 
   // Last byte
-  checksum += readByte(); // 0x00
+  values[nBytes - 1] = readByte();
+  checksum += values[nBytes - 1];
   digitalWrite(LENS_ACK, 0); // Working
   // Note: No ready here, we're waiting for the body to drop
 
   // Now we reply with the checksum
-  //pinMode(DATA, OUTPUT);
-  //digitalWrite(DATA, HIGH); // Not sure why this is necessary, but it is
   waitBodyFall();
   digitalWrite(LENS_ACK, 1); // Ready
   waitBodyHigh();
@@ -127,8 +127,8 @@ void writeBytesChecksum(uint8 nBytes, uint8* values)
   uint8 checksum = 0;
 
   // Write the first byte, which is the number of bytes in the packet
-  waitBodyFall(); // Wait for body to drop
-  digitalWrite(LENS_ACK, 0); // We drop and then rise (ready to send next byte)
+  //waitBodyFall(); // Wait for body to drop
+  //digitalWrite(LENS_ACK, 0); // We drop and then rise (ready to send next byte)
   digitalWrite(LENS_ACK, 1);
   writeByte(nBytes);
 
@@ -150,7 +150,6 @@ void writeBytesChecksum(uint8 nBytes, uint8* values)
 
 void standbyPacket(void)
 {
-  readBytesChecksum(4);
 
   uint8 values[31] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -174,42 +173,89 @@ int main()
   delay(10);
   digitalWrite(LENS_ACK, 0);
 
-  // Wait until the body ACK goes high
-  waitBodyRise();
+  while(1){
+    // Wait until the body ACK goes high
+    waitBodyRise();
 
-  // Ready
-  digitalWrite(LENS_ACK, 1);
+    // Ready
+    digitalWrite(LENS_ACK, 1);
 
-  readBytesChecksum(4); // Read four bytes
+    // Read four bytes
+    uint32 commandBytes;
+    readBytesChecksum(4, (uint8*)&commandBytes);
 
-  waitBodyFall();
-  digitalWrite(LENS_ACK, 0);
-  waitBodyRise();
-  digitalWrite(LENS_ACK, 1);
+    waitBodyFall();
+    digitalWrite(LENS_ACK, 0);
 
-  delay(500);
+    switch(commandBytes){
+    // Note that all of the case values have the bytes in reverse order from
+    // the way they are transmitted.
+    case 0x0000f2b0:
+      // There's a extra fall-rise sequence for some reason
+      waitBodyRise();
+      digitalWrite(LENS_ACK, 1);
+      delay(500);
 
-  digitalWrite(LENS_ACK, 0);
-  waitBodyLow(); // Falling edge happens very fast
-  digitalWrite(LENS_ACK, 1);
-  waitBodyRise();
+      digitalWrite(LENS_ACK, 0);
+      waitBodyLow(); // Falling edge happens very fast
+      digitalWrite(LENS_ACK, 1);
+      waitBodyRise();
 
-  writeByte(0x00);
+      writeByte(0x00);
+      break;
 
-  waitBodyLow(); // Falling edge happens very fast
-  digitalWrite(LENS_ACK, 0);
-  waitBodyRise();
-  digitalWrite(LENS_ACK, 1);
+    case 0x0000f6c0:
+      {
+      uint8 sendBytes[5] = {0x00, 0x0a, 0x10, 0xc4, 0x09};
+      writeBytesChecksum(5, sendBytes);
+      }
+      break;
 
-  readBytesChecksum(4); // Read four bytes
+    case 0x0001f5a0:
+      // A0 F5 01 00 is followed by dropping the clock pin for a ms.  This
+      // ruins the SPI hardware synchronization, so reset it here.
+      // There is no response for this command.
+      SPCR = 0;
+      while(!(CLK_PIN & CLK_HIGH)){} // Wait for clock to be high again
+      //delayMicroseconds(10); // TODO: There must be a better way.
+      Serial.write("reset!");
+      SPCR = 0;
+      SPCR = (1<<SPE) | (1<<DORD) | (1<<CPOL) | (1<<CPHA);
+      break;
 
-  uint8 sendBytes[5] = {0x00, 0x0a, 0x10, 0xc4, 0x09};
-  writeBytesChecksum(5, sendBytes);
+    case 0x0000f9c1:
+      {
+          // Information contained in here:
+  // Aperture limits, focus limits, zoom?
+  // Firmware version
+  // Vendor
+  // # bytes, bytes, checksum
+  uint8 sendBytes2[21] = {0x00, 0x00, 0x00, 0x01, 0x10, 0x00, 0x00, 0x41,
+                          0x41, 0x41, 0x32, 0x34, 0x33, 0x38, 0x34, 0x31,
+                          0x00, 0x00, 0x00, 0x01, 0x11};
+  writeBytesChecksum(21, sendBytes2);
 
-  waitBodyLow(); // Drop happens very fast
-  digitalWrite(LENS_ACK, 0);
-  waitBodyHigh();
-  digitalWrite(LENS_ACK, 1);
+      }
+      break;
+
+    case 0x0000f0c3:
+    case 0x0000f3cf:
+      // No idea what this does
+      {
+      uint8 sendBytes[4] = {0x00, 0x00, 0x00, 0x00};
+      writeBytesChecksum(4, sendBytes);
+      }
+      break;
+    default:
+      Serial.print("Unknown: ");
+      Serial.println(commandBytes, HEX);
+    }
+    waitBodyLow(); // We may have missed the edge, just wait for low
+    digitalWrite(LENS_ACK, 0);
+  }
+/*
+
+
 
   readBytesChecksum(4);
 
@@ -220,19 +266,9 @@ int main()
 
   // The body drops the clock for some unknown reason, ruining the
   // SPI line synchronization.  Reset the hardware to fix it.
-  SPCR = 0;
-  SPCR = (1<<SPE) | (1<<DORD) | (1<<CPOL) | (1<<CPHA);
+
   readBytesChecksum(4);
 
-  // Information contained in here:
-  // Aperture limits, focus limits, zoom?
-  // Firmware version
-  // Vendor
-  // # bytes, bytes, checksum
-  uint8 sendBytes2[21] = {0x00, 0x00, 0x00, 0x01, 0x10, 0x00, 0x00, 0x41,
-                          0x41, 0x41, 0x32, 0x34, 0x33, 0x38, 0x34, 0x31,
-                          0x00, 0x00, 0x00, 0x01, 0x11};
-  writeBytesChecksum(21, sendBytes2);
 
   waitBodyLow();
   digitalWrite(LENS_ACK, 0);
@@ -259,5 +295,6 @@ int main()
   while(1){
     //standbyPacket();
   }
+  */
   return(0);
 }

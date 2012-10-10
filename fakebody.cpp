@@ -15,7 +15,8 @@ void setup() {
   pinMode(BODY_ACK, OUTPUT);
   pinMode(LENS_ACK, INPUT);
   pinMode(CLK, OUTPUT);
-  pinMode(DATA, OUTPUT);
+  pinMode(DATA_MISO, OUTPUT);
+  pinMode(DATA_MOSI, INPUT); // We're only using MISO, but they're tied together.
   pinMode(FOCUS, OUTPUT);
   pinMode(SHUTTER, OUTPUT);
 
