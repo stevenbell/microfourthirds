@@ -22,6 +22,7 @@ void setup() {
 
   digitalWrite(SLEEP, LOW);
   digitalWrite(BODY_ACK, LOW);
+  digitalWrite(CLK, HIGH);
 }
 
 /* Writes a single byte on the SPI bus at about 500 kHz, and waits for the
@@ -93,7 +94,78 @@ inline void waitLensLow()
   while((LENS_ACK_PIN & LENS_ACK_HIGH)){}
 }
 
+/* Sends a 4-byte command and waits for the checksum
+ * Returns true if the checksum matches, false otherwise.
+ * The BODY_ACK pin should be low when this method enters.
+ * The BODY_ACK pin is low when this method exits. */
+bool sendCommand(uint8* bytes)
+{
+  uint8 checksum = 0; // Our running checksum
+  uint8 checkbyte; // Checksum from the lens
+
+  digitalWrite(BODY_ACK, HIGH); // Get the lens' attention
+  waitLensHigh(); // Wait for it to be ready
+
+  // Send the four bytes
+  for(uint8 i = 0; i < 4; i++){
+    writeByte(bytes[i]);
+    checksum += bytes[i];
+  }
+
+  pinMode(DATA, INPUT); // Relinquish control of the data pin
+
+  waitLensLow();
+  digitalWrite(BODY_ACK, LOW);
+  waitLensHigh();
+  digitalWrite(BODY_ACK, HIGH); // Tell the lens we're ready
+
+  checkbyte = readByte();
+
+  digitalWrite(BODY_ACK, LOW);
+
+  return(checksum == checkbyte);
+}
+
+/* Reads a series of bytes in response to a command
+ * bytes - Pointer to store the byte values in.
+ * maxBytes - Maximum number of bytes to read, not including header.
+ * Returns true if expected number of bytes is read, false otherwise. */
+uint16 readBytes(uint8* bytes, uint16 maxBytes)
+{
+  // Read the packet length
+  uint16 nBytes;
+
+  waitLensHigh();
+  digitalWrite(BODY_ACK, HIGH);
+  nBytes = readByte(); // Low 8 bits
+  digitalWrite(BODY_ACK, LOW);
+
+  waitLensRise();
+  digitalWrite(BODY_ACK, HIGH);
+  nBytes += (uint16)readByte() << 8; // High 8 bits
+  digitalWrite(BODY_ACK, LOW);
+
+  waitLensLow(); // Just to be safe
+
+  // If the lens is trying to give us more bytes than we have storage for, fail.
+  if(nBytes > maxBytes){
+    return(0);
+  }
+
+  for(uint16 i = 0; i < nBytes; i++){
+    waitLensHigh();
+    digitalWrite(BODY_ACK, HIGH);
+    readByte();
+    digitalWrite(BODY_ACK, LOW);
+    waitLensLow();
+  }
+
+  return(nBytes);
+}
+
 void powerup() {
+  uint8 bytedump[50]; // Array for dumping bytes read from the lens
+
   // Powerup
   digitalWrite(SLEEP, HIGH);
   delay(10);
@@ -105,121 +177,78 @@ void powerup() {
   delay(20);
 
   // Now start some data transfer
+  uint8 c1[4] = {0xB0, 0xF2, 0x00, 0x00};
+  sendCommand(c1);
+
+  // There seems to be an extra low-high here, not sure why
+  waitLensLow();
   digitalWrite(BODY_ACK, HIGH);
-  while(digitalRead(LENS_ACK) == 0){}
-
-  writeByte(0xB0);
-  writeByte(0xF2);
-  writeByte(0x00);
-  writeByte(0x00);
-
-  // Relinquish control of the data pin
-  pinMode(DATA, INPUT);
-
-  delayMicroseconds(1000);
-  digitalWrite(BODY_ACK, LOW);
-  // Probably supposed to do something here?
-  digitalWrite(BODY_ACK, HIGH); // Tell the lens we're ready
-  readByte(); // This should be 0xA2 (checksum)
-  digitalWrite(BODY_ACK, LOW); // Tell the lens we're working
-  // TODO: watch lens ACK
-  digitalWrite(BODY_ACK, HIGH); // Tell the lens we're done
-
-  waitLensFall();
+  waitLensFall(); // Wait for rise and fall
   digitalWrite(BODY_ACK, LOW);
   digitalWrite(BODY_ACK, HIGH);
 
   readByte(); // Should be 0x00?
   digitalWrite(BODY_ACK, LOW); // Tell the lens we're working
-  delayMicroseconds(1000); // Lens takes a while to respond?
-  digitalWrite(BODY_ACK, HIGH); // Tell the lens we're done
 
-  while(digitalRead(LENS_ACK) == 0){}
-  writeByte(0xC0);
-  writeByte(0xF6);
-  writeByte(0x00);
-  writeByte(0x00);
-
-  // Handoff of data pin
-  pinMode(DATA, INPUT);
-
-  // This should read
-  // 0xB6 (checksum) 0x05 (# bytes)  [0x00  0x0A  0x10  0xC4  0x09] (data) 0xE7 (checksum)
-  for(int i = 0; i < 8; i++){
-    digitalWrite(BODY_ACK, LOW);
-    waitLensRise();
-    digitalWrite(BODY_ACK, HIGH);
-    readByte();
-  }
-
-  digitalWrite(BODY_ACK, LOW);
   delay(1);
-  digitalWrite(BODY_ACK, HIGH);
-  waitLensRise();
 
-  writeByte(0xA0);
-  writeByte(0xF5);
-  writeByte(0x01);
-  writeByte(0x00);
+  uint8 c2[4] = {0xC0, 0xF6, 0x00, 0x00};
+  sendCommand(c2);
+  readBytes(bytedump, 5);
 
-  pinMode(DATA, INPUT);
-  digitalWrite(BODY_ACK, LOW);
-  digitalWrite(BODY_ACK, HIGH);
-  readByte(); // Should be 0x96 (checksum)
 
-  digitalWrite(BODY_ACK, LOW);
   delay(1);
-  digitalWrite(BODY_ACK, HIGH);
-  waitLensRise();
 
-  writeByte(0xC1);
-  writeByte(0xF9);
-  writeByte(0x00);
-  writeByte(0x00);
+  uint8 c3[4] = {0xA0, 0xF5, 0x01, 0x00};
+  sendCommand(c3);
 
-  pinMode(DATA, INPUT);
-  for(int i = 0; i < 24; i++){
-    digitalWrite(BODY_ACK, LOW);
-    waitLensRise();
-    digitalWrite(BODY_ACK, HIGH);
-    readByte();
-  }
-
-  digitalWrite(BODY_ACK, LOW);
+  // This is where the camera does a clock reset.  Is that important?
   delay(1);
+
+  uint8 c4[4] = {0xC1, 0xF9, 0x00, 0x00};
+  sendCommand(c4);
+
+  readBytes(bytedump, 0x15); // Read 21 bytes
+
+  delay(1);
+
+  uint8 c5[4] = {0x60, 0xF0, 0x00, 0x00};
+  sendCommand(c5);
+
   digitalWrite(BODY_ACK, HIGH);
-  waitLensRise();
-
-  writeByte(0x60);
-  writeByte(0xF0);
-  writeByte(0x00);
-  writeByte(0x00);
-
-  // Read one byte
-  pinMode(DATA, INPUT);
-  digitalWrite(BODY_ACK, LOW);
-  waitLensRise();
-  digitalWrite(BODY_ACK, HIGH);
-  readByte(); // Should be 0x50 (checksum)
-
-  digitalWrite(BODY_ACK, LOW);
-  delayMicroseconds(250);
-  digitalWrite(BODY_ACK, HIGH);
-  waitLensRise();
-
+  waitLensHigh();
+  // Old lens had different commands; not sure what these are.
   writeByte(0x05);
-  writeByte(0x0C);
-  writeByte(0x06);
-  writeByte(0xD1);
   writeByte(0x00);
-  writeByte(0x06);
+  writeByte(0x00);
+  writeByte(0x00);
+  writeByte(0x00);
+  writeByte(0x00);
 
   // Read one byte
   pinMode(DATA, INPUT);
   digitalWrite(BODY_ACK, LOW);
   waitLensRise();
   digitalWrite(BODY_ACK, HIGH);
-  readByte(); // Should be 0xD3
+  readByte();
+  digitalWrite(BODY_ACK, LOW);
+
+  // Standby packet
+  uint8 c6[4] = {0xC1, 0x80, 0x01, 0x06};
+  sendCommand(c6);
+  readBytes(bytedump, 0x1F); // Read 31 bytes
+
+  delay(1);
+
+  // Manual focus
+  //uint8 c7[4] = {0xA0, 0xB0, 0xFE, 0x00}; // Ring forward
+  uint8 c7[4] = {0xA0, 0xB0, 0xFE, 0x01}; // Ring reverse
+  sendCommand(c7);
+
+  delay(1);
+
+  uint8 c8[4] = {0xB1, 0x88, 0x03, 0x02};
+  sendCommand(c8);
 
   digitalWrite(BODY_ACK, LOW); // Clean up after ourselves
   delay(1);
@@ -329,11 +358,14 @@ int main()
 
     // Now send an extended packet
     delay(1);
-    uint8 one[] = {0x60, 0x80, 0xfe, 0x02, 0x00, 0x0a, 0x00, 0x01, 0xca, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint8 one[] = {0x60, 0x80, 0x03, 0xfe, 0x00,
+                   0x0a, 0x00,
+                   0x01, 0x00, 0x00, 0x00, 0x00,
+                   0x6c, 0xff, 0x01, 0x00, 0x00};
     extendedPacket(one);
 
     // Back to standby packets
-    for(int i = 0; i < 50; i++){
+    for(int i = 0; i < 2; i++){
       delay(13);
       pulseShutter();
       delayMicroseconds(1500);
@@ -375,7 +407,10 @@ int main()
 */
     // Another extended packet
     delay(1);
-    uint8 two[] = {0x60, 0x80, 0xfe, 0x02, 0x00, 0x0a, 0x00, 0x01, 0xb9, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint8 two[] = {0x60, 0x80, 0x04, 0xfe, 0x00,
+                   0x0a, 0x00,
+                   0x01, 0x00, 0x00, 0x00, 0x00,
+                   0xff, 0x7f, 0x05, 0x00, 0x00};
     extendedPacket(two);
 
   }

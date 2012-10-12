@@ -64,6 +64,7 @@ inline void waitBodyHigh()
  */
 uint8 readByte()
 {
+  SPCR = (1<<SPE) | (1<<DORD) | (1<<CPOL) | (1<<CPHA);
   pinMode(DATA_MISO, INPUT); // Just in case it was an output last
 
   // Clear the SPIF bit from any previously received bytes by reading SPDR
@@ -72,6 +73,7 @@ uint8 readByte()
   // Wait until we receive a byte
   while(!(SPSR & (1<<SPIF))) {}
 
+  SPCR = 0x00;
   return(SPDR);
 }
 
@@ -79,12 +81,12 @@ uint8 readByte()
  */
 void writeByte(uint8 value)
 {
+  SPCR = (1<<SPE) | (1<<DORD) | (1<<CPOL) | (1<<CPHA);
   // Set the bytes we want to write
   SPDR = value;
 
   // Set the MISO pin to be an output
-  //DATA_PIN |= DATA_MISO_WRITE;
-  pinMode(DATA_MISO, OUTPUT);
+  DATA_DIR |= DATA_MISO_WRITE;
 
   // Wait until transmission is finished
   while(!(SPSR & (1<<SPIF))) {}
@@ -92,6 +94,7 @@ void writeByte(uint8 value)
   // Clear SPIF
   // BUG: When this was set to 0x00, it didn't do anything.  Perhaps it was optimized away?
   SPDR = 0xFF;
+  SPCR = 0x00;
 }
 
 /* Reads a number of bytes and then transmits the checksum.
@@ -239,19 +242,44 @@ int main()
       break;
 
     case 0x0000f0c3:
-    case 0x0000f3cf:
-      // No idea what this does
+      // Appears to be some kind of firmware dump
+        waitBodyLow();
+        digitalWrite(LENS_ACK, 0);
+        digitalWrite(LENS_ACK, 1);
+        writeByte(0xBF);
+
+        waitBodyLow();
+        digitalWrite(LENS_ACK, 0);
+        digitalWrite(LENS_ACK, 1);
+        writeByte(0x08);
+
+      for(uint16 i = 0; i < 0x08BF; i++){
+        waitBodyLow();
+        digitalWrite(LENS_ACK, 0);
+        digitalWrite(LENS_ACK, 1);
+        writeByte(0x00);
+      }
+
+    case 0x0000f3c2:
+
+      /*
+    //case 0x0000f3cf:
       {
       uint8 sendBytes[4] = {0x00, 0x00, 0x00, 0x00};
       writeBytesChecksum(4, sendBytes);
       }
       break;
+      */
     default:
       Serial.print("Unknown: ");
       Serial.println(commandBytes, HEX);
     }
     waitBodyLow(); // We may have missed the edge, just wait for low
     digitalWrite(LENS_ACK, 0);
+
+    // Set the data pin low and let go of it
+    digitalWrite(DATA_MISO, 0);
+    pinMode(DATA_MISO, INPUT);
   }
 /*
 
