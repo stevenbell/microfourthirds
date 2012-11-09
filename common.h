@@ -15,6 +15,7 @@
 #define SLEEP 45 // Port L 4
 #define BODY_ACK 46 // Port L 3
 #define BODY_ACK_PIN PINL
+#define BODY_ACK_PORT PORTL
 
 #define LENS_ACK 47 // Port L 2
 #define LENS_ACK_PORT PORTL
@@ -40,19 +41,21 @@
 #define SPI_SS 53 // When low, the slave SPI is enabled
 
 // Useful bitmasks for manipulating the IO pins
-// Bitwise OR these with port registers to set pins high
+// Bitwise OR these with port registers to set pins high, or
+// bitwise AND these with pin registers to read the pin.
 const uint8 CLK_HIGH = 0b00000010; // Port B 1
 const uint8 DATA_MOSI_HIGH = 0b00000100; // Port B 2
 const uint8 DATA_MISO_HIGH = 0b00001000; // Port B 3
 #define DATA_HIGH DATA_MISO_HIGH
 
+const uint8 LENS_ACK_HIGH = 0b00000100; // Port L 2
+const uint8 BODY_ACK_HIGH = 0b00001000; // Port L 3
+
 // Bitwise AND these with port registers to set pins low
 const uint8 CLK_LOW = ~CLK_HIGH;
 const uint8 DATA_LOW = ~DATA_HIGH;
-
-// Bitwise AND these with port registers to read the pin
-const uint8 LENS_ACK_HIGH = 0b00000100; // Port L 2
-const uint8 BODY_ACK_HIGH = 0b00001000; // Port L 3
+const uint8 LENS_ACK_LOW = ~LENS_ACK_HIGH;
+const uint8 BODY_ACK_LOW = ~BODY_ACK_HIGH;
 
 // Bitwise OR these with port DDR registers to set outputs
 const uint8 CLK_WRITE = 0b00000010; // Port B 1

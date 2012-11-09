@@ -83,14 +83,14 @@ inline void waitLensRise()
 // Wait until the lens ACK pin is high
 inline void waitLensHigh()
 {
-  delayMicroseconds(2);
+  //delayMicroseconds(2);
   while(!(LENS_ACK_PIN & LENS_ACK_HIGH)){}
 }
 
 // Wait until the lens ACK pin is low
 inline void waitLensLow()
 {
-  delayMicroseconds(2);
+  //delayMicroseconds(2);
   while((LENS_ACK_PIN & LENS_ACK_HIGH)){}
 }
 
@@ -155,9 +155,12 @@ uint16 readBytes(uint8* bytes, uint16 maxBytes)
   for(uint16 i = 0; i < nBytes; i++){
     waitLensHigh();
     digitalWrite(BODY_ACK, HIGH);
-    readByte();
+    bytes[i] = readByte();
+    //BODY_ACK_PORT &= BODY_ACK_LOW; // Set low; digitalWrite is too slow here.
     digitalWrite(BODY_ACK, LOW);
-    waitLensLow();
+    // BUG: something isn't working with waitLensLow.
+    //waitLensLow();
+    delayMicroseconds(10);
   }
 
   return(nBytes);
@@ -241,8 +244,8 @@ void powerup() {
   delay(1);
 
   // Manual focus
-  //uint8 c7[4] = {0xA0, 0xB0, 0xFE, 0x00}; // Ring forward
-  uint8 c7[4] = {0xA0, 0xB0, 0xFE, 0x01}; // Ring reverse
+  uint8 c7[4] = {0xA0, 0xB0, 0xFE, 0x00}; // Ring forward
+  //uint8 c7[4] = {0xA0, 0xB0, 0xFE, 0x01}; // Ring reverse
   sendCommand(c7);
 
   delay(1);
@@ -256,35 +259,21 @@ void powerup() {
 
 void standbyPacket()
 {
-  const uint8 RESPONSE_BYTES = 34; // Number of bytes in the response
+  const uint8 RESPONSE_BYTES = 31;
+  uint8 resultBytes[RESPONSE_BYTES];
+  uint8 standbyRequest[] = {0xC1, 0x80, 0x01, 0x06};
+  sendCommand(standbyRequest);
+  waitLensLow(); // BUG: Hangs here if the function return doesn't happen fast enough
+  readBytes(resultBytes, RESPONSE_BYTES);
 
-  // Doing a waitLensRise() can be too slow here, so first check that the
-  // pin is low, then wait for it to be high after we set our pin.
-  waitLensLow();
-  digitalWrite(BODY_ACK, HIGH);
-  waitLensHigh();
-
-  writeByte(0xC1);
-  writeByte(0x80);
-  writeByte(0x01);
-  writeByte(0x02);
-
-  uint8 response[RESPONSE_BYTES];
-  pinMode(DATA, INPUT);
-  for(uint8 i = 0; i < RESPONSE_BYTES; i++){
-    digitalWrite(BODY_ACK, LOW);
-    waitLensHigh();
-    digitalWrite(BODY_ACK, HIGH);
-    response[i] = readByte();
-  }
-
-  digitalWrite(BODY_ACK, LOW);
-
-  for(uint8 i = 0; i < RESPONSE_BYTES; i++){
-    Serial.print(response[i]);
+  // Print all of the bytes, skipping the checksum at the end
+  /*
+  for(uint8 i = 0; i < RESPONSE_BYTES -1; i++){
+    Serial.print(resultBytes[i]);
     Serial.print(" ");
   }
   Serial.print('\n');
+  */
 
 }
 
@@ -308,9 +297,10 @@ void extendedPacket(uint8 data[17])
   data[4] = readByte();
 
   digitalWrite(BODY_ACK, LOW);
+  // We really should wait for the lens to be low here
   delayMicroseconds(250);
   digitalWrite(BODY_ACK, HIGH);
-  waitLensRise();
+  waitLensHigh();
 
   // Write 11 bytes
   for(uint8 i = 5; i < 16; i++){
@@ -321,7 +311,7 @@ void extendedPacket(uint8 data[17])
   // Read one byte
   pinMode(DATA, INPUT);
   digitalWrite(BODY_ACK, LOW);
-  waitLensRise();
+  waitLensHigh();
   digitalWrite(BODY_ACK, HIGH);
   data[16] = readByte();
 
@@ -343,29 +333,34 @@ int main()
   powerup();
   while(1){
     // Do some standby packets
-    for(int i = 0; i < 50; i++){
-      delay(13);
+    //for(int i = 0; i < 1; i++){
+    while(1){
+      delay(12);
       pulseShutter();
       delayMicroseconds(1500);
-
-      digitalWrite(FOCUS, !digitalRead(FOCUS)); // Flip the focus pin
-      delay(14);
-
-      pulseShutter();
-      delay(1);
       standbyPacket();
-    }
 
-    // Now send an extended packet
-    delay(1);
-    uint8 one[] = {0x60, 0x80, 0x03, 0xfe, 0x00,
+      delay(2);
+      digitalWrite(FOCUS, !digitalRead(FOCUS)); // Flip the focus pin
+
+      delay(12);
+      pulseShutter();
+      delayMicroseconds(1500);
+      standbyPacket();
+
+    // Now send an extended packet with an aperture command
+    uint8 one[] = {0x60, 0x80, 0xfe, 0x02, 0x00,
                    0x0a, 0x00,
-                   0x01, 0x00, 0x00, 0x00, 0x00,
-                   0x6c, 0xff, 0x01, 0x00, 0x00};
+                   0x01, 0xc4, 0x04, 0x00, 0x00,
+                   0x00, 0x00, 0x00, 0x00, 0x00};
     extendedPacket(one);
 
+      delay(2);
+      digitalWrite(FOCUS, !digitalRead(FOCUS)); // Flip the focus pin
+    }
+    /*
     // Back to standby packets
-    for(int i = 0; i < 2; i++){
+    for(int i = 0; i < 50; i++){
       delay(13);
       pulseShutter();
       delayMicroseconds(1500);
@@ -377,42 +372,15 @@ int main()
       delay(1);
       standbyPacket();
     }
-/*
-    // Back to standby packets
-    for(int i = 0; i < 50; i++){
-      digitalWrite(FOCUS, HIGH);
-      delay(3);
 
-      // Pulse the shutter pin
-      digitalWrite(SHUTTER, HIGH);
-      delay(1);
-      digitalWrite(SHUTTER, LOW);
-      delay(1);
-
-      standbyPacket();
-      delay(8);
-
-      digitalWrite(FOCUS, LOW);
-      delay(3);
-
-      // Pulse the shutter pin
-      digitalWrite(SHUTTER, HIGH);
-      delay(1);
-      digitalWrite(SHUTTER, LOW);
-      delay(1);
-
-      standbyPacket();
-      delay(8);
-    }
-*/
     // Another extended packet
     delay(1);
     uint8 two[] = {0x60, 0x80, 0x04, 0xfe, 0x00,
                    0x0a, 0x00,
                    0x01, 0x00, 0x00, 0x00, 0x00,
                    0xff, 0x7f, 0x05, 0x00, 0x00};
-    extendedPacket(two);
-
+    extendedPacket(one);
+*/
   }
 
 
