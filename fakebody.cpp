@@ -8,6 +8,9 @@
 #include "typedef.h"
 #include "common.h"
 
+// Number of bytes in a standby response packet
+#define STANDBY_RESPONSE_BYTES 31
+
 /* Performs one-time pin initialization and other setup */
 void setup() {
   Serial.begin(115200);
@@ -138,7 +141,9 @@ uint16 readBytes(uint8* bytes, uint16 maxBytes)
   nBytes = readByte(); // Low 8 bits
   BODY_ACK_PORT &= BODY_ACK_LOW;
 
-  waitLensRise();
+  delayMicroseconds(10);
+  waitLensHigh();
+
   digitalWrite(BODY_ACK, HIGH);
   nBytes += (uint16)readByte() << 8; // High 8 bits
   digitalWrite(BODY_ACK, LOW);
@@ -250,24 +255,33 @@ void powerup() {
 
   uint8 c8[4] = {0xB1, 0x88, 0x03, 0x02};
   sendCommand(c8);
+  // There's something funny here - an extra handshake on the ACK lines, and then a single byte
+  // Assume at this point that our ACK line is low
+  waitLensLow();
+  digitalWrite(BODY_ACK, HIGH);
+  // Lens goes high and then low again
+  waitLensFall();
+  digitalWrite(BODY_ACK, LOW);
+  waitLensHigh();
+  digitalWrite(BODY_ACK, HIGH);
+  readByte(); // This should be zero
+
 
   digitalWrite(BODY_ACK, LOW); // Clean up after ourselves
   delay(1);
 }
 
-void standbyPacket()
+void standbyPacket(uint8* response)
 {
-  const uint8 RESPONSE_BYTES = 31;
-  uint8 resultBytes[RESPONSE_BYTES];
   uint8 standbyRequest[] = {0xC1, 0x80, 0x01, 0x06};
   sendCommand(standbyRequest);
   waitLensLow(); // BUG: Hangs here if the function return doesn't happen fast enough
-  readBytes(resultBytes, RESPONSE_BYTES);
+  readBytes(response, STANDBY_RESPONSE_BYTES);
 
   // Print all of the bytes, skipping the checksum at the end
   /*
-  for(uint8 i = 0; i < RESPONSE_BYTES -1; i++){
-    Serial.print(resultBytes[i]);
+  for(uint8 i = 0; i < STANDBY_RESPONSE_BYTES -1; i++){
+    Serial.print(response[i]);
     Serial.print(" ");
   }
   Serial.print('\n');
@@ -304,7 +318,9 @@ void extendedPacket(uint8 data[17])
   for(uint8 i = 5; i < 16; i++){
     writeByte(data[i]);
   }
-  delayMicroseconds(100);
+
+  // Wait for the lens to go low; this signals the handoff, just like other checksums
+  waitLensLow();
 
   // Read one byte
   pinMode(DATA, INPUT);
@@ -329,58 +345,90 @@ int main()
   init(); // Arduino library initialization
   setup(); // Pin setup and other init
   powerup();
+
+  uint16 packetNum = 0; // Count of how many packets we've sent
+  uint8 standbyResponse[STANDBY_RESPONSE_BYTES]; // Last standby response we've gotten
+
   while(1){
-    // Do some standby packets
-    //for(int i = 0; i < 1; i++){
-    while(1){
-      for(uint8 i = 0; i < 4; i++){
+    if(packetNum == 1){
+      // Unknown (but presumably important) setup command
       delay(9);
       pulseShutter();
       delayMicroseconds(1500);
-      standbyPacket();
+      standbyPacket(standbyResponse);
 
-      delay(4);
-      digitalWrite(FOCUS, !digitalRead(FOCUS)); // Flip the focus pin
-      }
-
-      delay(9);
-      pulseShutter();
-      delayMicroseconds(700);
-      standbyPacket();
-
-    // Now send an extended packet with an aperture command
-    uint8 one[] = {0x60, 0x80, 0xfe, 0x02, 0x00,
-                   0x0a, 0x00,
-                   0x01, 0xbd, 0x04, 0x00, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x00};
-    extendedPacket(one);
+      // Now send an extended packet with an aperture command
+      uint8 one[] = {0x60, 0x80, 0x06, 0xfe, 0x00,
+                     0x0a, 0x00,
+                     0x01, 0x00, 0x00, 0x00, 0x00,
+                     0x00, 0x00, 0x00, 0x00, 0x00};
+      extendedPacket(one);
 
       delay(4);
       digitalWrite(FOCUS, !digitalRead(FOCUS)); // Flip the focus pin
     }
-    /*
-    // Back to standby packets
-    for(int i = 0; i < 50; i++){
-      delay(13);
+    else if(packetNum == 3){
+      // Aperture command
+      delay(9);
       pulseShutter();
       delayMicroseconds(1500);
+      standbyPacket(standbyResponse);
 
+      // Now send an extended packet with an aperture command
+      uint8 one[] = {0x60, 0x80, 0xfe, 0x02, 0x00,
+                     0x0a, 0x00,
+                     0x01, standbyResponse[8] + 1, standbyResponse[9], 0x00, 0x00,
+                     0x00, 0x00, 0x00, 0x00, 0x00};
+      extendedPacket(one);
+
+      delay(4);
       digitalWrite(FOCUS, !digitalRead(FOCUS)); // Flip the focus pin
-      delay(14);
-
-      pulseShutter();
-      delay(1);
-      standbyPacket();
     }
+    else if(packetNum % 60 == 3){
+      // Aperture command
+      delay(9);
+      pulseShutter();
+      delayMicroseconds(1500);
+      standbyPacket(standbyResponse);
 
-    // Another extended packet
-    delay(1);
-    uint8 two[] = {0x60, 0x80, 0x04, 0xfe, 0x00,
-                   0x0a, 0x00,
-                   0x01, 0x00, 0x00, 0x00, 0x00,
-                   0xff, 0x7f, 0x05, 0x00, 0x00};
-    extendedPacket(one);
-*/
+      // Now send an extended packet with an aperture command
+      uint8 one[] = {0x60, 0x80, 0xfe, 0x02, 0x00,
+                     0x0a, 0x00,
+                     0x01, 0xd7, 0x03, 0x00, 0x00,
+                     0x00, 0x00, 0x00, 0x00, 0x00};
+      extendedPacket(one);
+
+      delay(4);
+      digitalWrite(FOCUS, !digitalRead(FOCUS)); // Flip the focus pin
+    }
+    else if(packetNum % 60 == 33){
+      // Aperture command
+      delay(9);
+      pulseShutter();
+      delayMicroseconds(1500);
+      standbyPacket(standbyResponse);
+
+      // Now send an extended packet with an aperture command
+      uint8 one[] = {0x60, 0x80, 0xfe, 0x02, 0x00,
+                     0x0a, 0x00,
+                     0x01, 0x81, 0x04, 0x00, 0x00,
+                     0x00, 0x00, 0x00, 0x00, 0x00};
+      extendedPacket(one);
+
+      delay(4);
+      digitalWrite(FOCUS, !digitalRead(FOCUS)); // Flip the focus pin
+    }
+    else{
+      // Just a standby packet
+      delay(9);
+      pulseShutter();
+      delayMicroseconds(1500);
+      standbyPacket(standbyResponse);
+
+      delay(4);
+      digitalWrite(FOCUS, !digitalRead(FOCUS)); // Flip the focus pin
+    }
+    packetNum++;
   }
 
 
