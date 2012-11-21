@@ -83,14 +83,12 @@ inline void waitLensRise()
 // Wait until the lens ACK pin is high
 inline void waitLensHigh()
 {
-  //delayMicroseconds(2);
   while(!(LENS_ACK_PIN & LENS_ACK_HIGH)){}
 }
 
 // Wait until the lens ACK pin is low
 inline void waitLensLow()
 {
-  //delayMicroseconds(2);
   while((LENS_ACK_PIN & LENS_ACK_HIGH)){}
 }
 
@@ -138,7 +136,7 @@ uint16 readBytes(uint8* bytes, uint16 maxBytes)
   waitLensHigh();
   digitalWrite(BODY_ACK, HIGH);
   nBytes = readByte(); // Low 8 bits
-  digitalWrite(BODY_ACK, LOW);
+  BODY_ACK_PORT &= BODY_ACK_LOW;
 
   waitLensRise();
   digitalWrite(BODY_ACK, HIGH);
@@ -280,7 +278,7 @@ void standbyPacket()
 void extendedPacket(uint8 data[17])
 {
   digitalWrite(BODY_ACK, HIGH);
-  waitLensRise();
+  waitLensHigh();
 
   // Write 4 bytes
   writeByte(data[0]);
@@ -335,27 +333,29 @@ int main()
     // Do some standby packets
     //for(int i = 0; i < 1; i++){
     while(1){
-      delay(12);
+      for(uint8 i = 0; i < 4; i++){
+      delay(9);
       pulseShutter();
       delayMicroseconds(1500);
       standbyPacket();
 
-      delay(2);
+      delay(4);
       digitalWrite(FOCUS, !digitalRead(FOCUS)); // Flip the focus pin
+      }
 
-      delay(12);
+      delay(9);
       pulseShutter();
-      delayMicroseconds(1500);
+      delayMicroseconds(700);
       standbyPacket();
 
     // Now send an extended packet with an aperture command
     uint8 one[] = {0x60, 0x80, 0xfe, 0x02, 0x00,
                    0x0a, 0x00,
-                   0x01, 0xc4, 0x04, 0x00, 0x00,
+                   0x01, 0xbd, 0x04, 0x00, 0x00,
                    0x00, 0x00, 0x00, 0x00, 0x00};
     extendedPacket(one);
 
-      delay(2);
+      delay(4);
       digitalWrite(FOCUS, !digitalRead(FOCUS)); // Flip the focus pin
     }
     /*
