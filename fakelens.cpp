@@ -17,6 +17,8 @@ void setup() {
   pinMode(LENS_ACK, OUTPUT);
   pinMode(FOCUS, INPUT);
   pinMode(SHUTTER, INPUT);
+  digitalWrite(FOCUS, LOW); // Turn off the pull-ups just to be sure
+  digitalWrite(SHUTTER, LOW);
 
   // Configure the SPI hardware
   // SPE - Enable
@@ -153,10 +155,15 @@ void writeBytesChecksum(uint8 nBytes, uint8* values)
 
 void standbyPacket(void)
 {
-
-  uint8 values[31] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+  uint8 values[31] = {0x00, // Probably part of the length, but writeBytesChecksum assumes 1-byte length for now
+                      0xc2, 0xe1, 0x00, 0x00, // Status
+                      0x00, 0x0c, // 4/5: Raw zoom, raw focus
+                      0x42, 0x00, // 6/7: Focus distance
+                      0xb1, 0x03, // 8/9: Effective aperture
+                      0x00, 0x0c, // 10/11: Scaled zoom
+                      0x0c, 0x00, // 12-13: raw focus?
+                      0xd2, 0x00, 0x2f, 0x01, 0x8c, 0x01, 0xea, 0x01,
+                      0x47, 0x02, 0xa4, 0x5c, 0x03, 0x4e, 0x02};
   writeBytesChecksum(31, values);
 }
 
@@ -208,10 +215,10 @@ int main()
       break;
 
     case 0x0000f6c0:
-      {
+    {
       uint8 sendBytes[5] = {0x00, 0x0a, 0x10, 0xc4, 0x09};
       writeBytesChecksum(5, sendBytes);
-      }
+    }
       break;
 
     case 0x0001f5a0:
@@ -228,21 +235,68 @@ int main()
 
     case 0x0000f9c1:
       {
-          // Information contained in here:
-  // Aperture limits, focus limits, zoom?
-  // Firmware version
-  // Vendor
-  // # bytes, bytes, checksum
-  uint8 sendBytes2[21] = {0x00, 0x00, 0x00, 0x01, 0x10, 0x00, 0x00, 0x41,
-                          0x41, 0x41, 0x32, 0x34, 0x33, 0x38, 0x34, 0x31,
-                          0x00, 0x00, 0x00, 0x01, 0x11};
-  writeBytesChecksum(21, sendBytes2);
-
+        // Information contained in here:
+        // Aperture limits, focus limits, zoom?
+        // Firmware version
+        // Vendor
+        // # bytes, bytes, checksum
+        uint8 sendBytes[21] = {0x00, 0x00, 0x00, 0x01, 0x10, 0x00, 0x00, 0x41,
+                                0x41, 0x42, 0x32, 0x32, 0x33, 0x34, 0x36, 0x35,
+                                0x00, 0x00, 0x00, 0x01, 0x11};
+        writeBytesChecksum(21, sendBytes);
       }
       break;
 
+    case 0x0000f060:
+    {
+      uint8 bytes[5];
+      waitBodyHigh();
+      digitalWrite(LENS_ACK, 1);
+
+      // The first byte (length) isn't part of the checksum, so do it here.
+      readByte();
+      digitalWrite(LENS_ACK, 0); // Working
+      digitalWrite(LENS_ACK, 1); // Ready
+
+      readBytesChecksum(0x05, bytes);
+    }
+      break;
+
+    // Standby packet
+    case 0x060180c1: // E-PL1
+    case 0x020180c1: // E-P1
+      standbyPacket();
+      break;
+
+    // Extended packets - aperture, focus, etc.
+    case 0xfe068060:
+    case 0x02fe8060:
+    {
+      uint8 bytes[10];
+      waitBodyHigh();
+      digitalWrite(LENS_ACK, 1);
+
+      // The first byte (length) isn't part of the checksum, so do it here.
+      readByte();
+      digitalWrite(LENS_ACK, 0); // Working
+      digitalWrite(LENS_ACK, 1); // Ready
+
+      readBytesChecksum(0x0a, bytes);
+    }
+      break;
+
+    case 0x020388b1:
+      // Why is our ack line low here?
+      waitBodyHigh();
+      digitalWrite(LENS_ACK, 1);
+      digitalWrite(LENS_ACK, 0);
+      waitBodyLow();
+      digitalWrite(LENS_ACK, 1);
+      writeByte(0x00);
+      break;
+
     case 0x0000f0c3:
-      // Appears to be some kind of firmware dump
+      /*// Appears to be some kind of firmware dump
         waitBodyLow();
         digitalWrite(LENS_ACK, 0);
         digitalWrite(LENS_ACK, 1);
@@ -259,6 +313,7 @@ int main()
         digitalWrite(LENS_ACK, 1);
         writeByte(0x00);
       }
+      */
 
     case 0x0000f3c2:
 
